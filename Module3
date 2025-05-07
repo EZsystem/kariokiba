@@ -1,0 +1,100 @@
+'-------------------------------------
+' Module: mod_inp_Icube
+' 説明　：Icube仮テーブルへ初期値を適用する補完処理（整理版）
+' 作成日：2025/04/30
+' 更新日：-
+'-------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'=================================================
+' 処理名 : ApplyDefaultValuesToImportTable_Safe
+' 説明   : 仮テーブル(tbl_Temp_Icube_Import)の空欄に初期値を補完する
+' 引数   : なし
+'=================================================
+Public Sub ApplyDefaultValuesToImportTable_Safe()
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    ' --- 1. 初期値辞書の構築（既存関数を使用） ---
+    'Debug.Print "=== 初期値辞書の構築開始 ==="
+    Dim defaultMap As Object
+    Set defaultMap = BuildDefaultValueMap("tbl_xl_IcubeColSetting")
+    If defaultMap Is Nothing Then Exit Sub
+    'Debug.Print "=== 初期値辞書の構築完了 ==="
+
+    ' --- 2. 仮テーブルの編集 ---
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset("tbl_Temp_Icube_Import", dbOpenDynaset)
+
+    Dim sanitizer As New acc_clsTextSanitizer
+    Dim recCount As Long: recCount = 0
+
+    Do Until rs.EOF
+        recCount = recCount + 1
+        'Debug.Print "■レコード #" & recCount
+
+        Dim updateNeeded As Boolean
+        updateNeeded = False
+
+        Dim fld As DAO.Field
+        For Each fld In rs.Fields
+            Dim fldName As String
+            fldName = Trim(fld.Name)
+            'Debug.Print "  処理フィールド：" & fldName
+
+            If defaultMap.Exists(fldName) Then
+                If FieldExists(rs, fldName) Then
+                    If sanitizer.IsEmptyText(fld.value) Then
+                        'Debug.Print "    → 初期値を代入：" & fldName & " ← " & defaultMap(fldName)
+                        If Not updateNeeded Then
+                            rs.Edit
+                            updateNeeded = True
+                        End If
+                        rs.Fields(fldName).value = defaultMap(fldName)
+                    End If
+                End If
+            End If
+        Next fld
+
+        If updateNeeded Then
+            rs.Update
+            'Debug.Print "  → 更新済"
+        Else
+            'Debug.Print "  → 変更なし"
+        End If
+
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    MsgBox "空欄に初期値をセットしたにゃ", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "エラーが発生したにゃ：" & vbCrLf & Err.description, vbCritical
+    Debug.Print "【ApplyDefaultValuesToImportTable_Safe エラー】：" & Err.description
+End Sub
+
+
+
+Private Function FieldExists(rs As DAO.Recordset, fieldName As String) As Boolean
+    On Error GoTo NotFound
+    Dim dummy As String
+    dummy = rs.Fields(fieldName).Name
+    FieldExists = True
+    Exit Function
+
+NotFound:
+    Debug.Print "【フィールドが存在しません】：" & fieldName
+    FieldExists = False
+    Err.Clear
+End Function
+
+
+
+
+
