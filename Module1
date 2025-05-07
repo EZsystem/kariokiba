@@ -1,10 +1,23 @@
+'-------------------------------------
+' Module: mod_ExcelImport_ClearAndLoad
+' 説明　：Icube系テーブルの事前クリアと、Excelファイルからのデータ取込
+' 作成日：2025/05/07
+' 更新日：-
+'-------------------------------------
+
 Option Compare Database
 Option Explicit
 
-Public Sub ImportExcel_WithTableClear()
+'=================================================
+' サブルーチン名 : Import_ExcelAndClearTables
+' 説明   : Excelファイル選択→テーブル初期化→取込を一括実行する
+'=================================================
+Public Sub Import_ExcelAndClearTables()
     On Error GoTo EH
 
-    ' --- 1. 事前に対象テーブルをクリア ---
+    ' ----------------------------
+    ' 1. 対象テーブルをすべてクリア
+    ' ----------------------------
     Dim cleaner As New acc_clsTableCleaner
     cleaner.Init
     cleaner.AddTable "Icube_"
@@ -12,28 +25,29 @@ Public Sub ImportExcel_WithTableClear()
     cleaner.AddTable "tbl_Temp_Icube_Cleaning"
     cleaner.ClearAll
 
-    ' --- 2. Excelファイル選択 ---
-    Dim fPath As String
+    ' ----------------------------
+    ' 2. Excelファイルの選択
+    ' ----------------------------
+    Dim filePath As String
     With Application.FileDialog(msoFileDialogFilePicker)
-        .title = "Excelファイルを選択してにゃ"
+        .Title = "Excelファイルを選択してにゃ"
         .Filters.Clear
         .Filters.Add "Excelファイル", "*.xlsx"
         If .Show <> -1 Then Exit Sub
-        fPath = .SelectedItems(1)
+        filePath = .SelectedItems(1)
     End With
 
-    ' --- 3. 列番号マスタの取得 ---
-    Dim db As DAO.Database
-    Set db = CurrentDb
-
+    ' ----------------------------
+    ' 3. 列番号マスタを読み取り（配列列番号 → フィールド名）
+    ' ----------------------------
+    Dim db As DAO.Database: Set db = CurrentDb
     Dim rsMap As DAO.Recordset
-    Set rsMap = db.OpenRecordset("SELECT * FROM tbl_xl_IcubeColSetting ORDER BY 配列列番号", dbOpenSnapshot)
+    Set rsMap = db.OpenRecordset( _
+        "SELECT * FROM tbl_xl_IcubeColSetting ORDER BY 配列列番号", dbOpenSnapshot)
 
-    Dim colMap As Object
-    Set colMap = CreateObject("Scripting.Dictionary")
-
-    Dim colIdx As Long
+    Dim colMap As Object: Set colMap = CreateObject("Scripting.Dictionary")
     Do Until rsMap.EOF
+        Dim colIdx As Long
         colIdx = Nz(rsMap("配列列番号"), 0)
         If colIdx > 0 Then
             colMap(colIdx) = Nz(rsMap("タイトル名_置換え後"), "")
@@ -42,23 +56,27 @@ Public Sub ImportExcel_WithTableClear()
     Loop
     rsMap.Close
 
-    ' --- 4. Excelからデータを読み取り ---
+    ' ----------------------------
+    ' 4. Excelファイルからデータ取得
+    ' ----------------------------
     Dim xlApp As Object, wb As Object, ws As Object
     Set xlApp = CreateObject("Excel.Application")
     xlApp.Visible = False
-    Set wb = xlApp.Workbooks.Open(fPath, ReadOnly:=True)
+    Set wb = xlApp.Workbooks.Open(filePath, ReadOnly:=True)
     Set ws = wb.Sheets(1)
 
     Dim lastRow As Long
-    lastRow = ws.Cells(ws.Rows.count, 2).End(-4162).row ' B列の最終行（xlUp）
+    lastRow = ws.Cells(ws.Rows.Count, 2).End(-4162).Row  ' B列の最終行（xlUp）
     Dim arr As Variant
-    arr = ws.Range(ws.Cells(6, 2), ws.Cells(lastRow, 141)).value  ' B6:EK[最終行]
+    arr = ws.Range(ws.Cells(6, 2), ws.Cells(lastRow, 141)).Value  ' 範囲：B6 ～ EK[lastRow]
 
     wb.Close False
     xlApp.Quit
     Set xlApp = Nothing
 
-    ' --- 5. 仮テーブルへ格納 ---
+    ' ----------------------------
+    ' 5. 仮テーブルにデータを格納
+    ' ----------------------------
     Dim rsOut As DAO.Recordset
     Set rsOut = db.OpenRecordset("tbl_Temp_Icube_Import", dbOpenDynaset)
 
@@ -67,21 +85,23 @@ Public Sub ImportExcel_WithTableClear()
         rsOut.AddNew
         For c = 1 To UBound(arr, 2)
             If colMap.Exists(c) Then
-                rsOut(colMap(c)).value = Nz(arr(r, c), "")
+                rsOut(colMap(c)).Value = Nz(arr(r, c), "")
             End If
         Next c
         rsOut.Update
     Next r
-
     rsOut.Close
-    MsgBox "テーブルクリアとExcel取込が完了したにゃ", vbInformation
+
+    MsgBox "テーブルのクリアとExcel取込が完了したにゃ", vbInformation
     Exit Sub
 
+' ----------------------------
+' エラーハンドリング
+' ----------------------------
 EH:
-    MsgBox "エラーが発生したにゃ：" & vbCrLf & Err.description, vbCritical
+    MsgBox "エラーが発生したにゃ：" & vbCrLf & Err.Description, vbCritical
     If Not xlApp Is Nothing Then
         xlApp.Quit
         Set xlApp = Nothing
     End If
 End Sub
-
