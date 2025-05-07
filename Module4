@@ -67,25 +67,66 @@ Public Sub TransferToIcube_StandardStyle( _
     Loop
     rsMap.Close
 
-    ' --- 2. 転写処理 ---
+    '=================================================
+    ' スキップ条件を辞書に読み込む（フィールド名 → 値集合）
+    '=================================================
+    Dim rsSkip As DAO.Recordset
+    Dim skipDict As Object: Set skipDict = CreateObject("Scripting.Dictionary")
+
+    Set rsSkip = db.OpenRecordset("tbl_xl_IcubeRowSkip", dbOpenSnapshot)
+    Do Until rsSkip.EOF
+        Dim fld As String: fld = Trim(rsSkip("対象フィールド名"))
+        Dim val As String: val = Trim(rsSkip("削除対象値"))
+        If Not skipDict.Exists(fld) Then
+            skipDict.Add fld, CreateObject("Scripting.Dictionary")
+        End If
+        skipDict(fld)(val) = True
+        rsSkip.MoveNext
+    Loop
+    rsSkip.Close
+
+    '=================================================
+    ' 仮テーブルから本テーブルへ1件ずつ転写（スキップ条件考慮）
+    '=================================================
     Do Until rsSource.EOF
+        ' --- 転写スキップ条件の判定 ---
+        Dim shouldSkip As Boolean: shouldSkip = False
+        Dim fldSkip As Variant
+    For Each fldSkip In skipDict.Keys
+        Dim fldNameSkip As String
+        fldNameSkip = CStr(fldSkip)
+    
+        If FieldExists(rsSource, fldNameSkip) Then
+            Dim sourceVal As String
+            sourceVal = Trim(Nz(rsSource(fldNameSkip).value, ""))
+            If skipDict(fldNameSkip).Exists(sourceVal) Then
+                shouldSkip = True
+                Exit For
+            End If
+        End If
+    Next fldSkip
+
+        If shouldSkip Then
+            rsSource.MoveNext
+            GoTo nextRecord
+        End If
+
+        ' --- レコード追加開始 ---
         rsTarget.AddNew
 
         Dim fldName As Variant
         For Each fldName In fieldTypeMap.Keys
-            ' フィールド存在チェック
+            ' --- フィールド存在チェック（元／先） ---
             If Not FieldExists(rsSource, CStr(fldName)) Then
-
                 Debug.Print "※転写元に存在しない：" & fldName
-                GoTo SkipField
+                GoTo skipField
             End If
-
-           If Not FieldExists(rsSource, CStr(fldName)) Then
-
+            If Not FieldExists(rsTarget, CStr(fldName)) Then
                 Debug.Print "※転写先に存在しない：" & fldName
-                GoTo SkipField
+                GoTo skipField
             End If
 
+            ' --- 型変換処理 ---
             Dim raw As Variant: raw = rsSource(fldName).value
             Dim vbaType As String
 
@@ -94,12 +135,10 @@ Public Sub TransferToIcube_StandardStyle( _
             If Err.Number <> 0 Then
                 Debug.Print "※未対応型 → スキップ：" & fldName & " (" & fieldTypeMap(fldName) & ")"
                 Err.Clear
-                GoTo SkipField
+                GoTo skipField
             End If
             On Error GoTo EH
 
-            ' --- 型変換＆代入 ---
-            Dim val As Variant
             Select Case vbaType
                 Case "String":   val = dataCleaner.TextToString(raw)
                 Case "Long":     val = dataCleaner.TextToLong(raw)
@@ -114,10 +153,11 @@ Public Sub TransferToIcube_StandardStyle( _
 
             rsTarget(fldName).value = val
 
-SkipField:
+skipField:
         Next fldName
 
         rsTarget.Update
+nextRecord:
         rsSource.MoveNext
     Loop
 
