@@ -1,0 +1,87 @@
+Option Compare Database
+Option Explicit
+
+Public Sub ImportExcel_WithTableClear()
+    On Error GoTo EH
+
+    ' --- 1. 事前に対象テーブルをクリア ---
+    Dim cleaner As New acc_clsTableCleaner
+    cleaner.Init
+    cleaner.AddTable "Icube_"
+    cleaner.AddTable "tbl_Temp_Icube_Import"
+    cleaner.AddTable "tbl_Temp_Icube_Cleaning"
+    cleaner.ClearAll
+
+    ' --- 2. Excelファイル選択 ---
+    Dim fPath As String
+    With Application.FileDialog(msoFileDialogFilePicker)
+        .title = "Excelファイルを選択してにゃ"
+        .Filters.Clear
+        .Filters.Add "Excelファイル", "*.xlsx"
+        If .Show <> -1 Then Exit Sub
+        fPath = .SelectedItems(1)
+    End With
+
+    ' --- 3. 列番号マスタの取得 ---
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    Dim rsMap As DAO.Recordset
+    Set rsMap = db.OpenRecordset("SELECT * FROM tbl_xl_IcubeColSetting ORDER BY 配列列番号", dbOpenSnapshot)
+
+    Dim colMap As Object
+    Set colMap = CreateObject("Scripting.Dictionary")
+
+    Dim colIdx As Long
+    Do Until rsMap.EOF
+        colIdx = Nz(rsMap("配列列番号"), 0)
+        If colIdx > 0 Then
+            colMap(colIdx) = Nz(rsMap("タイトル名_置換え後"), "")
+        End If
+        rsMap.MoveNext
+    Loop
+    rsMap.Close
+
+    ' --- 4. Excelからデータを読み取り ---
+    Dim xlApp As Object, wb As Object, ws As Object
+    Set xlApp = CreateObject("Excel.Application")
+    xlApp.Visible = False
+    Set wb = xlApp.Workbooks.Open(fPath, ReadOnly:=True)
+    Set ws = wb.Sheets(1)
+
+    Dim lastRow As Long
+    lastRow = ws.Cells(ws.Rows.count, 2).End(-4162).row ' B列の最終行（xlUp）
+    Dim arr As Variant
+    arr = ws.Range(ws.Cells(6, 2), ws.Cells(lastRow, 141)).value  ' B6:EK[最終行]
+
+    wb.Close False
+    xlApp.Quit
+    Set xlApp = Nothing
+
+    ' --- 5. 仮テーブルへ格納 ---
+    Dim rsOut As DAO.Recordset
+    Set rsOut = db.OpenRecordset("tbl_Temp_Icube_Import", dbOpenDynaset)
+
+    Dim r As Long, c As Long
+    For r = LBound(arr, 1) To UBound(arr, 1)
+        rsOut.AddNew
+        For c = 1 To UBound(arr, 2)
+            If colMap.Exists(c) Then
+                rsOut(colMap(c)).value = Nz(arr(r, c), "")
+            End If
+        Next c
+        rsOut.Update
+    Next r
+
+    rsOut.Close
+    MsgBox "テーブルクリアとExcel取込が完了したにゃ", vbInformation
+    Exit Sub
+
+EH:
+    MsgBox "エラーが発生したにゃ：" & vbCrLf & Err.description, vbCritical
+    If Not xlApp Is Nothing Then
+        xlApp.Quit
+        Set xlApp = Nothing
+    End If
+End Sub
+
