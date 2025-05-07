@@ -1,0 +1,121 @@
+'-------------------------------------
+' Module: mod_tblDefaultHelper
+' 説明　：初期値設定マスタに基づいて、テーブルの空欄に値を補完する関数群
+' 作成日：2025/04/30
+' 更新日：-
+'-------------------------------------
+
+Option Compare Database
+Option Explicit
+
+'=================================================
+' 関数名 : ApplyDefaultValuesToImportTable_Safe
+' 説明   : Icube仮テーブル(tbl_Temp_Icube_Import)の空欄に初期値を補完する
+' 引数   : なし
+'=================================================
+Public Sub ApplyDefaultValuesToImportTable_Safe()
+    Dim success As Boolean
+    success = ApplyDefaultValuesToTable("tbl_Temp_Icube_Import", "tbl_xl_IcubeColSetting")
+
+    If success Then
+        MsgBox "空欄に初期値をセットしたにゃ", vbInformation
+    Else
+        MsgBox "初期値補完処理でエラーが発生したにゃ", vbExclamation
+    End If
+End Sub
+
+'=================================================
+' 関数名 : ApplyDefaultValuesToTable
+' 説明   : 空欄に初期値を設定する（マスタに基づく）
+' 引数   : targetTable（String）    対象テーブル名
+'        : settingTable（String）   設定マスタテーブル名
+' 戻り値 : Boolean                  成功したらTrue
+'=================================================
+Public Function ApplyDefaultValuesToTable(ByVal targetTable As String, _
+                                          ByVal settingTable As String) As Boolean
+    On Error GoTo EH
+
+    Dim db As DAO.Database
+    Set db = CurrentDb
+
+    Dim defaultMap As Object
+    Set defaultMap = BuildDefaultValueMap(settingTable)
+    If defaultMap Is Nothing Then Exit Function
+
+    Dim sanitizer As New acc_clsTextSanitizer
+
+    Dim rs As DAO.Recordset
+    Set rs = db.OpenRecordset(targetTable, dbOpenDynaset)
+
+    Dim recCount As Long: recCount = 0
+
+    Do Until rs.EOF
+        recCount = recCount + 1
+        Dim updateNeeded As Boolean: updateNeeded = False
+
+        Dim fld As DAO.Field
+        For Each fld In rs.Fields
+            Dim fldName As String
+            fldName = Trim(fld.Name)
+
+            If defaultMap.Exists(fldName) Then
+                If sanitizer.IsEmptyText(fld.value) Then
+                    If Not updateNeeded Then rs.Edit
+                    rs(fldName).value = defaultMap(fldName)
+                    updateNeeded = True
+                End If
+            End If
+        Next fld
+
+        If updateNeeded Then rs.Update
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    ApplyDefaultValuesToTable = True
+    Exit Function
+
+EH:
+    Debug.Print "【ApplyDefaultValuesToTable エラー】：" & Err.description
+    ApplyDefaultValuesToTable = False
+End Function
+
+'=================================================
+' 関数名 : BuildDefaultValueMap
+' 説明   : マスタテーブルからフィールド名と初期値の辞書を生成する
+' 引数   : settingTable（String） 設定マスタテーブル名
+' 戻り値 : Object（Dictionary）   フィールド名 → 初期値 のマップ
+'=================================================
+Public Function BuildDefaultValueMap(ByVal settingTable As String) As Object
+    On Error GoTo EH
+
+    Dim rs As DAO.Recordset
+    Set rs = CurrentDb.OpenRecordset( _
+        "SELECT [タイトル名_置換え後], [空欄対応モード] " & _
+        "FROM " & settingTable & " " & _
+        "WHERE Nz([取込フラグ], False) = True AND Nz([空欄対応モード],'') <> ''", dbOpenSnapshot)
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Dim sanitizer As New acc_clsTextSanitizer
+
+    Do Until rs.EOF
+        Dim keyName As String
+        keyName = Trim(rs("タイトル名_置換え後"))
+        If Not dict.Exists(keyName) Then
+            dict.Add keyName, sanitizer.CleanText(rs("空欄対応モード"))
+        End If
+        rs.MoveNext
+    Loop
+
+    rs.Close
+    Set BuildDefaultValueMap = dict
+    Exit Function
+
+EH:
+    Debug.Print "【BuildDefaultValueMap エラー】：" & Err.description
+    Set BuildDefaultValueMap = Nothing
+End Function
+
+
