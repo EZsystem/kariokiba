@@ -45,6 +45,6 @@ Public Sub assign_priceCategory()
 
     rsMain.Close
     rsZone.Close
-    MsgBox "H–‹àŠz‹æ•ª‚Ì“]Ê‚ªŠ®—¹‚µ‚½‚É‚á", vbInformation
+    'MsgBox "H–‹àŠz‹æ•ª‚Ì“]Ê‚ªŠ®—¹‚µ‚½‚É‚á", vbInformation
 End Sub
 
