@@ -1,331 +1,172 @@
-Option Explicit
+'-------------------------------------
+' Module: xlmod_MidFormData_Processing
+' 説明  : 中間整形シートのデータ読み込み～変換～出力～含有量分解処理を行う
+' 作成日: 2025/05/22
+' 更新日: -
+'-------------------------------------
+Option Explicit   ' ●3-2 Option宣言:contentReference[oaicite:0]{index=0}
 
-'==============================
-' メイン処理：配列読み込み＋タイトル変換
-'==============================
-Sub Main()
-    Dim arr1() As Variant
-    Dim arr2() As Variant
-    Dim temp1() As Variant
+'=================================================
+' サブルーチン名 : Process_MidFormData
+' 説明   : 中間整形シートのデータを配列に読み取り、
+'          タイトル修正・結合・出力・含有量分解を実行する
+' 引数   : なし
+' 戻り値 : なし
+'=================================================
+Public Sub Process_MidFormData()
+    ' --- 1. 初期化・変数宣言 ---
+    Dim arrData      As Variant
+    Dim arrMapping   As Variant
+    Dim arrTranspose As Variant
+    Dim outputRange  As Range
 
-    ' 1. 中間整形シートからデータ読み込み
-    arr1 = LoadData_MidForm()
+    ' --- 2. データ読み込み ---
+    arrData = LoadData_MidForm()
 
-    ' 2. 正誤表から修正ルールを読み込み
-    temp1 = LoadCorrectionTable()
+    ' --- 3. 正誤表読み込み ---
+    arrMapping = LoadCorrectionTable()
 
-    ' 3. タイトルを修正＋チェック
-    ApplyTitleCorrection arr1, temp1
-    
-    ' 2. arr2を転置付きで読み込み
-    arr2 = LoadAndTransposeArr2()
+    ' --- 4. タイトル修正・チェック ---
+    ApplyTitleCorrection arrData, arrMapping
 
-    ' 3. 結合処理
-    Call MergeArr2IntoArr1(arr1, arr2)
+    ' --- 5. 転置データ読み込み ---
+    arrTranspose = LoadAndTransposeArr2()
 
+    ' --- 6. 配列結合処理 ---
+    MergeArr2IntoArr1 arrData, arrTranspose
 
-    Call ExportMatchingColumns(arr1)
+    ' --- 7. 出力処理（出力範囲を取得） ---
+    Set outputRange = ExportMatchingColumns(arrData)
 
-    MsgBox "配列読み込みとタイトル修正が完了したにゃ", vbInformation
-End Sub
+    ' --- 8. 含有量分解処理（貼り付け範囲のみ） ---
+    ConvertContentRangeToMinMax outputRange
 
+    ' --- 9. 完了メッセージ ---
+    MsgBox "中間整形シートのデータ変換処理が完了しました", vbInformation
+End Sub        ' ← Subの終わり
 
-
-'============================================
-' Sub : ExportMatchingColumns
-' 概要 : arr1のタイトルとシート10行目（O列?Q列）が一致する列だけを出力するにゃ
-'============================================
-Public Sub ExportMatchingColumns(ByRef arr1 As Variant)
-    Dim wsMidForm As Worksheet
-    Dim i As Long, j As Long
-    Dim title As String
+'=================================================
+' 関数名 : ExportMatchingColumns
+' 説明   : arrDataのタイトルとシート10行目の見出しが一致する列を出力し、
+'          出力範囲を返す
+' 引数   : arrData（ByRef, Variant）   処理対象配列
+' 戻り値 : Range                      出力セルの範囲
+'=================================================
+Public Function ExportMatchingColumns(ByRef arrData As Variant) As Range
+    ' --- 変数宣言ブロック ●3-3:contentReference[oaicite:1]{index=1} ---
+    Dim ws          As Worksheet
     Dim headerRange As Range
-    Dim matchCols As Collection
-    Dim arrOut() As Variant
-    Dim outColIndex As Long
-    Dim r As Long
-    Dim cell As Range
-    Dim startRow As Long
+    Dim matchCols   As New Collection
+    Dim arrOut()    As Variant
+    Dim i           As Long, j As Long
+    Dim title       As String
+    Dim cell        As Range
+    Dim outCol      As Long
+    Dim startRow    As Long
+    Dim colOutput   As Range
+    Dim rngOutput   As Range
 
-    Set wsMidForm = ThisWorkbook.Sheets("中間整形シート")
-    Set headerRange = wsMidForm.Range("O10:U10")
+    ' --- 初期化 ---
+    Set ws = ThisWorkbook.Sheets("中間整形シート")
+    Set headerRange = ws.Range("O10:U10")
 
-    Set matchCols = New Collection
-
-    ' 1. 一致する列を探すにゃ
-    For j = LBound(arr1, 2) To UBound(arr1, 2)
-        title = Trim(CStr(arr1(1, j)))
+    ' --- タイトル一致列抽出 ---
+    For j = LBound(arrData, 2) To UBound(arrData, 2)
+        title = Trim(CStr(arrData(1, j)))
         For Each cell In headerRange
             If Trim(CStr(cell.Value)) = title Then
-                matchCols.Add Array(j, cell.Column) ' {配列列, 出力列}
+                matchCols.Add Array(j, cell.Column)
                 Exit For
             End If
         Next cell
     Next j
 
-    ' 2. 一致列がなければ警告
     If matchCols.Count = 0 Then
-        MsgBox "一致する列が見つからなかったにゃ", vbExclamation
-        Exit Sub
+        MsgBox "一致する列が見つかりません", vbExclamation
+        Exit Function
     End If
 
-    ' 3. 出力用配列を作成（2行目以降）
-    ReDim arrOut(1 To UBound(arr1, 1) - 1, 1 To matchCols.Count)
-
-    For i = 2 To UBound(arr1, 1)
+    ' --- 出力配列作成 ---
+    ReDim arrOut(1 To UBound(arrData, 1) - 1, 1 To matchCols.Count)
+    For i = 2 To UBound(arrData, 1)
         For j = 1 To matchCols.Count
-            arrOut(i - 1, j) = arr1(i, matchCols(j)(0))
+            arrOut(i - 1, j) = arrData(i, matchCols(j)(0))
         Next j
     Next i
 
-    ' 4. 出力処理（テキスト型＆追記）
+    ' --- 配列出力＆範囲収集（出力→Unionで範囲をまとめる） ---
     For j = 1 To matchCols.Count
-        outColIndex = matchCols(j)(1)
-
-        ' 出力開始行：既存データの最終行＋1（ただし11より小さければ11）
-        startRow = wsMidForm.Cells(wsMidForm.Rows.Count, outColIndex).End(xlUp).Row + 1
+        outCol = matchCols(j)(1)
+        startRow = ws.Cells(ws.Rows.Count, outCol).End(xlUp).Row + 1
         If startRow < 11 Then startRow = 11
 
-        ' セル書式をテキストに設定
-        wsMidForm.Range(wsMidForm.Cells(startRow, outColIndex), _
-                        wsMidForm.Cells(startRow + UBound(arrOut, 1) - 1, outColIndex)).NumberFormat = "@"
+        ' 書式設定
+        Set colOutput = ws.Cells(startRow, outCol).Resize(UBound(arrOut, 1), 1)
+        colOutput.NumberFormat = "@"
+        colOutput.Value = Application.Index(arrOut, 0, j)
 
-        ' データを書き込み
-        wsMidForm.Cells(startRow, outColIndex).Resize(UBound(arrOut, 1), 1).Value = _
-            Application.Index(arrOut, 0, j)
-    Next j
-
-        'MsgBox "配列データの出力が完了したにゃ（追記＆書式対応済み）", vbInformation
-End Sub
-
-
-'============================================
-' 関数 : LoadData_MidForm
-' 概要 : 中間整形シートのデータを2次元配列に格納
-'============================================
-Public Function LoadData_MidForm() As Variant
-    Dim wsMidForm As Worksheet
-    Dim lastRow As Long
-    Dim dataRange As Range
-    Dim arr1 As Variant
-
-    Set wsMidForm = ThisWorkbook.Sheets("中間整形シート")
-    lastRow = wsMidForm.Cells(wsMidForm.Rows.Count, "B").End(xlUp).Row
-    Set dataRange = wsMidForm.Range("B10:M" & lastRow)
-
-    arr1 = dataRange.Value
-    LoadData_MidForm = arr1
-End Function
-
-'============================================
-' 関数 : LoadCorrectionTable
-' 概要 : 正誤表（wsTitleMapping）の修正ルールを読み込む
-'============================================
-Public Function LoadCorrectionTable() As Variant
-    Dim wsTitleMapping As Worksheet
-    Dim lastRow As Long
-    Dim rng As Range
-    Dim temp1 As Variant
-
-    Set wsTitleMapping = ThisWorkbook.Sheets("入力_正誤表")
-    lastRow = wsTitleMapping.Cells(wsTitleMapping.Rows.Count, "B").End(xlUp).Row
-    Set rng = wsTitleMapping.Range("B7:D" & lastRow) ' B列:No（無視）, C列:変換前, D列:変換後
-
-    temp1 = rng.Value
-    LoadCorrectionTable = temp1
-End Function
-
-'============================================
-' Sub : ApplyTitleCorrection
-' 概要 : arr1 のタイトル行を正誤表に基づいて修正し、未変換と変換済みをログに出す
-'============================================
-Public Sub ApplyTitleCorrection(ByRef arr1 As Variant, ByVal temp1 As Variant)
-    Dim col As Long, fixRow As Long
-    Dim beforeVal As String, afterVal As String
-    Dim converted As Boolean
-    Dim notMatched As Collection, preConverted As Collection
-    Dim currentTitle As String
-
-    Set notMatched = New Collection
-    Set preConverted = New Collection
-
-    For col = LBound(arr1, 2) To UBound(arr1, 2)
-        currentTitle = Trim(CStr(arr1(1, col)))
-        converted = False
-
-        For fixRow = LBound(temp1, 1) To UBound(temp1, 1)
-            beforeVal = Trim(CStr(temp1(fixRow, 2))) ' 正誤表の変換前
-            afterVal = Trim(CStr(temp1(fixRow, 3)))  ' 正誤表の変換後
-
-            If currentTitle = beforeVal Then
-                arr1(1, col) = afterVal
-                converted = True
-                Exit For
-            End If
-
-            If currentTitle = afterVal Then
-                On Error Resume Next
-                preConverted.Add currentTitle, currentTitle
-                On Error GoTo 0
-                converted = True
-                Exit For
-            End If
-        Next fixRow
-
-        If Not converted Then
-            On Error Resume Next
-            If currentTitle <> "" Then notMatched.Add currentTitle, currentTitle
-            On Error GoTo 0
-        End If
-
-    Next col
-
-    ' === ログ出力（空行対策済） ===
-    Dim msg As String: msg = ""
-    Dim hasError As Boolean: hasError = False
-    Dim item As Variant
-    Dim partMsg As String
-
-    If notMatched.Count > 0 Then
-        hasError = True
-        partMsg = "◆正誤表に見つからなかったタイトルがあるにゃ：" & vbCrLf
-        For Each item In notMatched
-            partMsg = partMsg & "・" & item & vbCrLf
-        Next
-        msg = msg & partMsg
-    End If
-
-    If preConverted.Count > 0 Then
-        hasError = True
-        partMsg = "◆すでに変換後のタイトルだったもの：" & vbCrLf
-        For Each item In preConverted
-            partMsg = partMsg & "・" & item & vbCrLf
-        Next
-        If msg <> "" Then msg = msg & vbCrLf ' 空でなければ改行を追加
-        msg = msg & partMsg
-    End If
-
-    If hasError Then
-        Debug.Print "【タイトル変換エラーログ】"
-        Debug.Print msg
-        'MsgBox msg, vbExclamation, "タイトル変換チェックにゃ"
-    End If
-End Sub
-
-'====================================================
-' Function : LoadAndTransposeArr2
-' 概要     : 中間整形シートのB3:C6を読み込んで転置して返すにゃ
-' 戻り値   : Variant型2次元配列（arr2）
-'====================================================
-Public Function LoadAndTransposeArr2() As Variant
-    Dim wsMidForm As Worksheet
-    Dim rawData As Variant
-    Dim arr2() As Variant
-    Dim r As Long, c As Long
-
-    Set wsMidForm = ThisWorkbook.Sheets("中間整形シート")
-
-    ' 1. B3:C6の値を読み込む
-    rawData = wsMidForm.Range("B3:C6").Value
-
-    ' 2. 転置（行列入れ替え）
-    ReDim arr2(1 To UBound(rawData, 2), 1 To UBound(rawData, 1))
-
-    For r = 1 To UBound(rawData, 1)
-        For c = 1 To UBound(rawData, 2)
-            arr2(c, r) = rawData(r, c)
-        Next c
-    Next r
-
-    ' 3. 転置済み配列を返す
-    LoadAndTransposeArr2 = arr2
-End Function
-
-
-'==================================================
-' Sub : MergeArr2IntoArr1
-' 概要 : arr2のタイトルに一致する列をarr1内に見つけて結合するにゃ
-'==================================================
-Public Sub MergeArr2IntoArr1(ByRef arr1 As Variant, ByVal arr2 As Variant)
-    Dim j As Long, col As Long
-    Dim titleToFind As String
-    Dim matchCol As Long
-    Dim i As Long
-
-    For j = LBound(arr2, 2) To UBound(arr2, 2)
-        titleToFind = Trim(CStr(arr2(1, j)))
-        matchCol = -1
-
-        ' arr1のタイトル行から一致列を探す
-        For col = LBound(arr1, 2) To UBound(arr1, 2)
-            If Trim(CStr(arr1(1, col))) = titleToFind Then
-                matchCol = col
-                Exit For
-            End If
-        Next col
-
-        ' 見つかったら、2行目以降すべてに arr2 の値を代入
-        If matchCol <> -1 Then
-            For i = 2 To UBound(arr1, 1)
-                arr1(i, matchCol) = arr2(2, j)
-            Next i
+        ' 範囲を統合
+        If rngOutput Is Nothing Then
+            Set rngOutput = colOutput
         Else
-            Debug.Print "※arr1に見つからなかったタイトル：" & titleToFind
+            Set rngOutput = Union(rngOutput, colOutput)
         End If
     Next j
 
-    'MsgBox "arr2 の値を arr1 に結合したにゃ", vbInformation
-End Sub
+    ' --- 結果返却 ---
+    Set ExportMatchingColumns = rngOutput
+End Function        ' ← Functionの終わり
 
-
-Public Sub ConvertContentRangeToMinMax()
-    Dim ws As Worksheet
-    Dim wsMap As Worksheet
-    Dim rng As Range
-    Dim cell As Range
-    Dim text As String
-    Dim mapDict As Object
-    Dim key As Variant
-    Dim rowIdx As Long
+'=================================================
+' サブルーチン名 : ConvertContentRangeToMinMax
+' 説明   : 指定された含有量セル範囲を最小値・最大値に分解して
+'          同一行のV列・W列に出力する
+' 引数   : rng（ByVal, Range）   処理対象範囲
+' 戻り値 : なし
+'=================================================
+Public Sub ConvertContentRangeToMinMax(ByVal rng As Range)
+    ' --- 変数宣言 ---
+    Dim ws       As Worksheet
+    Dim wsMap    As Worksheet
+    Dim mapDict  As Object
+    Dim key      As Variant
+    Dim cell     As Range
+    Dim original As String
     Dim splitVals() As String
-    Dim minVal As String, maxVal As String
+    Dim minVal   As String, maxVal As String
+    Dim rowIdx   As Long
 
     ' --- 準備 ---
-    Set ws = ThisWorkbook.Sheets("中間整形シート")
+    Set ws = rng.Worksheet
     Set wsMap = ThisWorkbook.Sheets("含有量_区切り記号表")
     Set mapDict = CreateObject("Scripting.Dictionary")
-subarasii
-    ' --- 区切り記号正規化辞書（A列:元, B列:正規化）---
+
+    ' --- 区切り記号正規化辞書読み込み ---
     rowIdx = 2
     Do While wsMap.Cells(rowIdx, 1).Value <> ""
         If wsMap.Cells(rowIdx, 2).Value <> "" Then
-            mapDict(Trim(wsMap.Cells(rowIdx, 1).Value)) = Trim(wsMap.Cells(rowIdx, 2).Value)
+            mapDict(Trim(wsMap.Cells(rowIdx, 1).Value)) = _
+                Trim(wsMap.Cells(rowIdx, 2).Value)
         End If
         rowIdx = rowIdx + 1
     Loop
 
-    ' --- 処理範囲（U列） ---
-    Set rng = ws.Range("U11", ws.Cells(ws.Rows.Count, "U").End(xlUp))
-
-    ' --- 含有量分解処理 ---
+    ' --- 含有量分解処理（渡された範囲だけ） ---
     For Each cell In rng
-        Dim original As String
         original = Trim(Replace(cell.Value, "　", "")) ' 全角スペース除去
-
-        ' 区切り記号の正規化
+        ' 正規化
         For Each key In mapDict.Keys
             original = Replace(original, key, mapDict(key))
         Next key
 
-        ' 値の分割
+        ' 分割
         If InStr(original, "-") > 0 Then
             splitVals = Split(original, "-")
             If UBound(splitVals) = 1 Then
                 minVal = CleanNumericText(splitVals(0))
                 maxVal = CleanNumericText(splitVals(1))
             Else
-                minVal = ""
-                maxVal = ""
+                minVal = "": maxVal = ""
             End If
         Else
             minVal = CleanNumericText(original)
@@ -338,12 +179,13 @@ subarasii
         ws.Cells(rowIdx, "W").Value = maxVal
     Next cell
 
-    MsgBox "含有量を最小・最大に分解して出力したにゃ！", vbInformation
-End Sub
+    ' --- 完了メッセージ ---
+    'MsgBox "含有量を最小・最大に分解して出力しました", vbInformation
+End Sub        ' ← Subの終わり
 
 '============================================
 ' 関数：CleanNumericText
-' 概要：文字列中の最初の数値を取り出す（左右の記号を除去）
+' 説明：文字列中の最初の数値を取り出す（左右の記号を除去）
 '============================================
 Private Function CleanNumericText(ByVal s As String) As String
     Dim re As Object
@@ -351,10 +193,200 @@ Private Function CleanNumericText(ByVal s As String) As String
     re.Pattern = "\d+(\.\d+)?"
     re.Global = False
 
-    If re.test(s) Then
+    If re.Test(s) Then
         CleanNumericText = re.Execute(s)(0).Value
     Else
         CleanNumericText = ""
     End If
-End Function
+End Function    ' ← Functionの終わり
+
+
+'=================================================
+' 関数名 : LoadData_MidForm
+' 説明   : 中間整形シートのデータを2次元配列に読み込む
+' 引数   : なし
+' 戻り値 : Variant型2次元配列（B10:M最終行）
+'=================================================
+Public Function LoadData_MidForm() As Variant
+    Dim ws      As Worksheet
+    Dim lastRow As Long
+    Dim rng     As Range
+    Dim result  As Variant
+
+    ' --- 初期化 ---
+    Set ws = ThisWorkbook.Sheets("中間整形シート")
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    Set rng = ws.Range("B10:M" & lastRow)
+
+    ' --- 値取得 ---
+    result = rng.Value
+
+    ' --- 結果返却 ---
+    LoadData_MidForm = result
+End Function        ' ← 関数の終わり
+
+'=================================================
+' 関数名 : LoadCorrectionTable
+' 説明   : 入力_正誤表シートから修正ルールを読み込む
+' 引数   : なし
+' 戻り値 : Variant型2次元配列（B7:D最終行）
+'=================================================
+Public Function LoadCorrectionTable() As Variant
+    Dim ws      As Worksheet
+    Dim lastRow As Long
+    Dim rng     As Range
+    Dim result  As Variant
+
+    ' --- 初期化 ---
+    Set ws = ThisWorkbook.Sheets("入力_正誤表")
+    lastRow = ws.Cells(ws.Rows.Count, "B").End(xlUp).Row
+    Set rng = ws.Range("B7:D" & lastRow)
+
+    ' --- 値取得 ---
+    result = rng.Value
+
+    ' --- 結果返却 ---
+    LoadCorrectionTable = result
+End Function        ' ← 関数の終わり
+
+'=================================================
+' サブルーチン名 : ApplyTitleCorrection
+' 説明   : arrDataのタイトル行を正誤表のルールで修正し、
+'          未変換および既変換タイトルをデバッグ出力する
+' 引数   : arrData（ByRef, Variant）   処理対象配列
+'         : arrMapping（ByVal, Variant）正誤表配列
+' 戻り値 : なし
+'=================================================
+Public Sub ApplyTitleCorrection(ByRef arrData As Variant, ByVal arrMapping As Variant)
+    Dim colIndex     As Long
+    Dim ruleRow      As Long
+    Dim beforeVal    As String
+    Dim afterVal     As String
+    Dim currentTitle As String
+    Dim isConverted  As Boolean
+    Dim notMatched   As New Collection
+    Dim preConverted As New Collection
+    Dim msg          As String
+    Dim hasError     As Boolean
+    Dim item         As Variant
+
+    ' --- タイトル変換処理 ---
+    For colIndex = LBound(arrData, 2) To UBound(arrData, 2)
+        currentTitle = Trim(CStr(arrData(1, colIndex)))
+        isConverted = False
+
+        ' --- 変換ルール適用 ---
+        For ruleRow = LBound(arrMapping, 1) To UBound(arrMapping, 1)
+            beforeVal = Trim(CStr(arrMapping(ruleRow, 2))) ' 変換前
+            afterVal = Trim(CStr(arrMapping(ruleRow, 3)))  ' 変換後
+
+            If currentTitle = beforeVal Then
+                arrData(1, colIndex) = afterVal
+                isConverted = True
+                Exit For
+            ElseIf currentTitle = afterVal Then
+                On Error Resume Next
+                preConverted.Add currentTitle, currentTitle
+                On Error GoTo 0
+                isConverted = True
+                Exit For
+            End If
+        Next ruleRow
+
+        If Not isConverted And currentTitle <> "" Then
+            On Error Resume Next
+            notMatched.Add currentTitle, currentTitle
+            On Error GoTo 0
+        End If
+    Next colIndex
+
+    ' --- ログ出力 ---
+    hasError = False
+    msg = ""
+    If notMatched.Count > 0 Then
+        hasError = True
+        msg = msg & "◆未変換タイトル：" & vbCrLf
+        For Each item In notMatched
+            msg = msg & "・" & item & vbCrLf
+        Next
+    End If
+    If preConverted.Count > 0 Then
+        hasError = True
+        msg = msg & vbCrLf & "◆既変換タイトル：" & vbCrLf
+        For Each item In preConverted
+            msg = msg & "・" & item & vbCrLf
+        Next
+    End If
+    If hasError Then
+        Debug.Print "【ApplyTitleCorrection ログ】"
+        Debug.Print msg
+    End If
+End Sub        ' ← Subの終わり
+
+'=================================================
+' 関数名 : LoadAndTransposeArr2
+' 説明   : 中間整形シートのB3:C6の値を転置して返却する
+' 引数   : なし
+' 戻り値 : Variant型2次元配列（転置後）
+'=================================================
+Public Function LoadAndTransposeArr2() As Variant
+    Dim ws       As Worksheet
+    Dim rawData  As Variant
+    Dim result() As Variant
+    Dim r        As Long, c As Long
+
+    ' --- 初期化 ---
+    Set ws = ThisWorkbook.Sheets("中間整形シート")
+    rawData = ws.Range("B3:C6").Value
+
+    ' --- 転置処理 ---
+    ReDim result(1 To UBound(rawData, 2), 1 To UBound(rawData, 1))
+    For r = 1 To UBound(rawData, 1)
+        For c = 1 To UBound(rawData, 2)
+            result(c, r) = rawData(r, c)
+        Next c
+    Next
+
+    ' --- 結果返却 ---
+    LoadAndTransposeArr2 = result
+End Function        ' ← 関数の終わり
+
+'=================================================
+' サブルーチン名 : MergeArr2IntoArr1
+' 説明   : arrTransposeのタイトルに一致する列をarrDataに結合する
+' 引数   : arrData（ByRef, Variant）       処理対象配列
+'         : arrTranspose（ByVal, Variant） 転置配列
+' 戻り値 : なし
+'=================================================
+Public Sub MergeArr2IntoArr1(ByRef arrData As Variant, ByVal arrTranspose As Variant)
+    Dim j          As Long
+    Dim colIndex   As Long
+    Dim titleToFind As String
+    Dim matchIndex As Long
+    Dim r          As Long
+
+    ' --- マージ処理 ---
+    For j = LBound(arrTranspose, 2) To UBound(arrTranspose, 2)
+        titleToFind = Trim(CStr(arrTranspose(1, j)))
+        matchIndex = -1
+
+        ' --- 配列タイトル検索 ---
+        For colIndex = LBound(arrData, 2) To UBound(arrData, 2)
+            If Trim(CStr(arrData(1, colIndex))) = titleToFind Then
+                matchIndex = colIndex
+                Exit For
+            End If
+        Next
+
+        ' --- 結合実行 ---
+        If matchIndex > 0 Then
+            For r = 2 To UBound(arrData, 1)
+                arrData(r, matchIndex) = arrTranspose(2, j)
+            Next r
+        Else
+            Debug.Print "【MergeArr2IntoArr1】一致しないタイトル：" & titleToFind
+        End If
+    Next j
+End Sub        ' ← Subの終わり
+
 
